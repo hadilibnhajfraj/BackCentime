@@ -1,17 +1,19 @@
 const router = require("express").Router();
 const rdvCtrl = require("../controllers/rendezVousController");
-const { verifyToken, isClient,isAdmin } = require('../middleware/auth');
+const { verifyToken, isClient,isAdmin,isAgent } = require('../middleware/auth');
 
 // Client
 router.post("/reserver", verifyToken, isClient, rdvCtrl.reserver);
 router.get("/client", verifyToken, isClient, rdvCtrl.clientRdvs);
 
 // Admin
-router.put("/confirmer/:id", verifyToken, isAdmin, rdvCtrl.confirmer);
+router.post("/confirmer/:id", verifyToken, isAdmin, rdvCtrl.confirmer);
 router.put("/annuler/:id", verifyToken, isAdmin, rdvCtrl.annuler);
+router.get('/admin', verifyToken, isAdmin, rdvCtrl.rdvAdmin);
 
 // Agent
-router.get("/agent/:agentId", verifyToken, rdvCtrl.agentRdvs);
-router.get('/admin', verifyToken, isAdmin, rdvCtrl.rdvAdmin);
+router.get("/agent/:agentId", verifyToken, isAgent, rdvCtrl.agentRdvs);
+router.get("/pending-validation", verifyToken, isAgent, rdvCtrl.getPendingForAgent);
+router.put("/agent/valider/:id", verifyToken, isAgent, rdvCtrl.agentValider);
 
 module.exports = router;

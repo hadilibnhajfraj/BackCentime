@@ -31,5 +31,9 @@ const isAdmin = (req, res, next) => {
   if (role === "ADMIN") return next();
   return res.status(403).json({ message: "⛔ Accès réservé aux administrateurs." });
 };
-
-module.exports = { verifyToken, isClient, isAdmin };
+const isAgent = (req, res, next) => {
+  const role = (req.user?.role || "").toUpperCase();
+  if (role === "AGENT") return next();
+  return res.status(403).json({ message: "⛔ Accès réservé aux agents." });
+};
+module.exports = { verifyToken, isClient, isAdmin ,isAgent};

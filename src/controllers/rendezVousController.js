@@ -8,41 +8,56 @@ const { sendEmailToAdmin } = require('../utils/emailSender');
 exports.reserver = async (req, res) => {
   try {
     const { id, role } = req.user;
-
     if (role.toUpperCase() !== "CLIENT") {
       return res.status(403).json({ message: "⛔ Réservations uniquement pour clients" });
     }
 
     const { dateRdv, duree } = req.body;
-
     if (!dateRdv || !duree) {
-      return res.status(400).json({
-        message: "❌ Champs requis : dateRdv et duree uniquement."
-      });
+      return res.status(400).json({ message: "❌ Champs requis : dateRdv et duree" });
     }
 
+    const start = new Date(dateRdv);
+    const end = new Date(start.getTime() + duree * 60000);
+
+    // 1️⃣ Vérifier si un agent est dispo dans ce créneau
+    const disponibilites = await db.Disponibilite.findAll({
+      where: {
+        start: { [db.Sequelize.Op.lte]: start },
+        end: { [db.Sequelize.Op.gte]: end }
+      }
+    });
+
+    let agentDisponible = null;
+    if (disponibilites.length > 0) {
+      // On prend le premier agent dispo
+      agentDisponible = disponibilites[0].agentId;
+    }
+
+    // 2️⃣ Créer le RDV avec ou sans agent
     const rdv = await RendezVous.create({
       clientId: id,
-      dateRdv,
+      agentId: agentDisponible || null,
+      dateRdv: start,
       duree,
-      statut: "en_attente"
+      statut: agentDisponible ? "valide" : "en_attente"
     });
 
-    // ✅ Récupération du nom du client via la jointure res_users → res_partner
-    let clientNom = "Client inconnu";
-
+    // 3️⃣ Email à l'admin si aucun agent dispo
     const user = await User.findByPk(id, {
-      include: [{ model: Partner, as: 'partner' }]
+      include: [{ model: Partner, as: "partner" }]
     });
 
-    if (user?.partner?.name) {
-      clientNom = user.partner.name;
+    const clientNom = user?.partner?.name || "Client inconnu";
+
+    if (!agentDisponible) {
+      await sendEmailToAdmin(rdv, clientNom); // demande à admin
     }
 
-    await sendEmailToAdmin(rdv, clientNom);
-
     res.status(201).json({
-      message: "✅ Demande de réservation envoyée avec succès",
+      message: agentDisponible
+        ? "✅ RDV confirmé automatiquement avec agent"
+        : "🔔 Pas d’agent disponible, demande envoyée à l’admin",
       rdv
     });
   } catch (error) {
@@ -50,6 +65,7 @@ exports.reserver = async (req, res) => {
     res.status(500).json({ message: "Erreur lors de la réservation", error });
   }
 };
+
 
 // ✅ Client : Voir ses RDVs
 exports.clientRdvs = async (req, res) => {
@@ -108,6 +124,7 @@ exports.agentRdvs = async (req, res) => {
 exports.rdvAdmin = async (req, res) => {
   try {
     const { role } = req.user;
+
     if (role?.toLowerCase() !== "admin") {
       return res.status(403).json({ message: "⛔ Accès réservé à l'administrateur" });
     }
@@ -128,27 +145,29 @@ exports.rdvAdmin = async (req, res) => {
     });
 
     const rdvsFormatted = rdvs.map((rdv) => {
-      const isClientInitiated = !!rdv.clientId;
       const start = rdv.dateRdv;
       const end = new Date(new Date(start).getTime() + rdv.duree * 60000);
 
-      if (isClientInitiated) {
-        return {
-          title: `RDV Client: ${rdv.client?.partner?.name || 'Inconnu'}`,
-          start,
-          end,
-          backgroundColor: '#f44336', // 🔴 Rouge pour les clients
-          borderColor: '#f44336',
-        };
-      } else {
-        return {
-          title: `RDV Agent: ${rdv.agent?.partner?.name || 'Inconnu'}`,
-          start,
-          end,
-          backgroundColor: '#2196f3', // 🔵 Bleu pour les agents
-          borderColor: '#2196f3',
-        };
-      }
+      // 🎨 Couleur par statut
+      let backgroundColor = "#ff9800"; // par défaut : en attente
+      if (rdv.statut === "valide") backgroundColor = "#4caf50";
+      else if (rdv.statut === "annule") backgroundColor = "#f44336";
+
+      // 🧾 Type de RDV (client ou agent)
+      const isClientInitiated = !!rdv.clientId;
+      const title = isClientInitiated
+        ? `RDV Client: ${rdv.client?.partner?.name || 'Inconnu'}`
+        : `RDV Agent: ${rdv.agent?.partner?.name || 'Inconnu'}`;
+
+      return {
+        id: rdv.id,
+        start,
+        end,
+        title,
+        statut: rdv.statut, // ✅ Inclus explicitement pour le frontend
+        backgroundColor,
+        borderColor: backgroundColor
+      };
     });
 
     res.json(rdvsFormatted);
@@ -159,3 +178,61 @@ exports.rdvAdmin = async (req, res) => {
 };
 
 
+// GET /rendezvous/pending-validation
+exports.getPendingForAgent = async (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ message: "Non autorisé : utilisateur manquant" });
+  }
+
+  const { id, role } = req.user;
+  if (role.toUpperCase() !== "AGENT") {
+    return res.status(403).json({ message: "⛔ Accès réservé aux agents" });
+  }
+
+  try {
+    const rdvs = await db.RendezVous.findAll({
+      where: {
+        statut: "en_attente",
+        agentId: null
+      }
+    });
+
+    res.json(rdvs);
+  } catch (error) {
+    res.status(500).json({ message: "Erreur chargement RDVs en attente", error });
+  }
+};
+
+
+// PUT /rendezvous/agent/valider/:id
+exports.agentValider = async (req, res) => {
+  const { id: agentId, role } = req.user;
+  const { decision } = req.body; // 'valider' ou 'refuser'
+
+  if (role.toUpperCase() !== "AGENT") {
+    return res.status(403).json({ message: "⛔ Seuls les agents peuvent valider" });
+  }
+
+  try {
+    const rdv = await db.RendezVous.findByPk(req.params.id);
+
+    if (!rdv || rdv.statut !== "en_attente") {
+      return res.status(404).json({ message: "RDV introuvable ou déjà traité" });
+    }
+
+    if (decision === "valider") {
+      rdv.agentId = agentId;
+      rdv.statut = "valide";
+      rdv.agentValidationDate = new Date();
+    } else if (decision === "refuser") {
+      rdv.statut = "annule";
+    } else {
+      return res.status(400).json({ message: "Décision invalide" });
+    }
+
+    await rdv.save();
+    res.json({ message: "Mise à jour effectuée", rdv });
+  } catch (error) {
+    res.status(500).json({ message: "Erreur de validation", error });
+  }
+};
