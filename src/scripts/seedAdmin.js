@@ -4,7 +4,7 @@ const {
   res_users,
   res_groups,
   res_users_res_groups_rel,
-  res_partner
+  res_partner,
 } = require('../models');
 const { Op } = require('sequelize');
 require('dotenv').config(); // ✅ Charger les variables d’environnement
@@ -29,7 +29,7 @@ require('dotenv').config(); // ✅ Charger les variables d’environnement
         purchase_warn: 'no-message',
         picking_warn: 'no-message',
         active: true,
-        company_id: 1 // à adapter
+        company_id: 1, // à adapter
       });
       console.log('✅ Partenaire créé avec ID = 1');
     }
@@ -50,14 +50,15 @@ require('dotenv').config(); // ✅ Charger les variables d’environnement
       email: adminEmail,
       password: hashedPassword,
       active: true,
-      partner_id: partner.id
+      partner_id: partner.id,
+      company_id: 1,
     });
 
     console.log('✅ Admin créé avec succès :', newAdmin.login);
 
     // 🔍 Recherche du groupe Admin
     const adminGroup = await res_groups.findOne({
-      where: { name: { [Op.iLike]: '%admin%' } }
+      where: { name: { [Op.iLike]: '%admin%' } },
     });
 
     if (!adminGroup) {
@@ -68,7 +69,7 @@ require('dotenv').config(); // ✅ Charger les variables d’environnement
     // 🔗 Liaison utilisateur ↔ groupe
     await res_users_res_groups_rel.create({
       uid: newAdmin.id,
-      gid: adminGroup.id
+      gid: adminGroup.id,
     });
 
     console.log(`🔐 Groupe "Admin" assigné à ${newAdmin.login}`);

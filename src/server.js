@@ -10,8 +10,15 @@ const PORT = process.env.PORT || 4000;
     await sequelize.authenticate();
     console.log('✅ Connexion PostgreSQL réussie.');
 
-  await sequelize.sync({ alter: true });
-// tu peux ajouter { alter: true } si nécessaire
+    // ❌ Ne jamais synchroniser ici les tables Odoo comme res_partner
+    // ✅ Synchroniser uniquement tes modèles personnalisés
+    const { Dossier, Document, Department, RendezVous, Disponibilite } = require('./models');
+
+    await Dossier.sync({ alter: true });
+    await Document.sync({ alter: true });
+    await Department.sync({ alter: true });
+    await RendezVous.sync({ alter: true });
+    await Disponibilite.sync({ alter: true });
 
     app.listen(PORT, () => {
       console.log(`🚀 Server listening on port ${PORT}`);

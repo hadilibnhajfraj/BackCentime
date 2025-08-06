@@ -17,51 +17,34 @@ const db = {};
 db.Sequelize = Sequelize;
 db.sequelize = sequelize;
 
-// Chargement des modèles
+// ✅ Import des modèles
 db.res_users = require('./res_users')(sequelize, DataTypes);
 db.res_partner = require('./res_partner')(sequelize, DataTypes);
 db.res_groups = require('./res_groups')(sequelize, DataTypes);
-db.Dossier = require('./Dossier')(sequelize, DataTypes); // ✅ Majuscule
+db.res_users_res_groups_rel = require('./res_users_res_groups_rel')(sequelize, DataTypes);
+
+db.Dossier = require('./Dossier')(sequelize, DataTypes);
 db.Document = require('./Document')(sequelize, DataTypes);
 db.Department = require('./Department')(sequelize, DataTypes);
-db.res_users_res_groups_rel = require('./res_users_res_groups_rel')(sequelize, DataTypes);
 db.RendezVous = require('./RendezVous')(sequelize, DataTypes);
 db.Disponibilite = require('./Disponibilite')(sequelize, DataTypes);
 
-// Relations utilisateurs et groupes
-db.res_users.hasMany(db.res_users_res_groups_rel, {
+// 🔗 Associations : utilisateurs <-> groupes
+db.res_users.belongsToMany(db.res_groups, {
+  through: db.res_users_res_groups_rel,
   foreignKey: 'uid',
-  as: 'groupLinks',
-  constraints: false
-});
-db.res_users_res_groups_rel.belongsTo(db.res_users, {
-  foreignKey: 'uid',
-  as: 'user',
-  constraints: false
-});
-db.res_users_res_groups_rel.belongsTo(db.res_groups, {
-  foreignKey: 'gid',
-  as: 'group',
-  constraints: false
-});
-db.res_groups.hasMany(db.res_users_res_groups_rel, {
-  foreignKey: 'gid',
-  as: 'userLinks',
-  constraints: false
-});
-// Un rendez-vous appartient à un client
-db.RendezVous.belongsTo(db.res_users, {
-  foreignKey: 'clientId',
-  as: 'client'
+  otherKey: 'gid',
+  as: 'groups'
 });
 
-// Un rendez-vous appartient à un agent
-db.RendezVous.belongsTo(db.res_users, {
-  foreignKey: 'agentId',
-  as: 'agent'
+db.res_groups.belongsToMany(db.res_users, {
+  through: db.res_users_res_groups_rel,
+  foreignKey: 'gid',
+  otherKey: 'uid',
+  as: 'users'
 });
 
-// Relation user <-> partner
+// 🔗 User <-> Partner
 db.res_users.belongsTo(db.res_partner, {
   foreignKey: 'partner_id',
   as: 'partner'
@@ -71,11 +54,8 @@ db.res_partner.hasOne(db.res_users, {
   as: 'user'
 });
 
-// Initialiser les associations des modèles
-Object.keys(db).forEach((modelName) => {
-  if (db[modelName].associate) {
-    db[modelName].associate(db);
-  }
-});
+// 🔗 RDV
+db.RendezVous.belongsTo(db.res_users, { foreignKey: 'clientId', as: 'client' });
+db.RendezVous.belongsTo(db.res_users, { foreignKey: 'agentId', as: 'agent' });
 
 module.exports = db;

@@ -2,7 +2,7 @@ const db = require('../models');
 const RendezVous = db.RendezVous;
 const User = db.res_users;
 const Partner = db.res_partner; // ✅ modèle res_partner
-const { sendEmailToAdmin } = require('../utils/emailSender');
+const { sendEmailToAdmin ,sendEmailToClient } = require('../utils/emailSender');
 
 // ✅ Client : Réserver un RDV
 exports.reserver = async (req, res) => {
@@ -43,20 +43,39 @@ exports.reserver = async (req, res) => {
       statut: agentDisponible ? "valide" : "en_attente"
     });
 
-    // 3️⃣ Email à l'admin si aucun agent dispo
+    // 3️⃣ Récupérer les infos du client
     const user = await User.findByPk(id, {
       include: [{ model: Partner, as: "partner" }]
     });
 
     const clientNom = user?.partner?.name || "Client inconnu";
+    const clientEmail = user?.partner?.email || null;
 
+    // 4️⃣ Si pas d’agent : notifier l’admin
     if (!agentDisponible) {
       await sendEmailToAdmin(rdv, clientNom); // demande à admin
+    } 
+    // 5️⃣ Si agent trouvé : notifier le client par email
+    else if (clientEmail) {
+      await sendEmailToClient({
+        to: clientEmail,
+        subject: "✅ Confirmation de votre rendez-vous CETIME",
+        html: `
+          <div style="font-family: Arial, sans-serif; font-size: 16px;">
+            <p>Bonjour ${clientNom},</p>
+            <p>Votre rendez-vous a été confirmé avec succès.</p>
+            <p><strong>Date :</strong> ${new Date(dateRdv).toLocaleString()}</p>
+            <p><strong>Durée :</strong> ${duree} minutes</p>
+            <p>Merci pour votre confiance.<br/>L'équipe CETIME</p>
+          </div>
+        `
+      });
     }
 
+    // 6️⃣ Retour API
     res.status(201).json({
       message: agentDisponible
-        ? "✅ RDV confirmé automatiquement avec agent"
+        ? "✅ RDV confirmé automatiquement avec agent (email envoyé au client)"
         : "🔔 Pas d’agent disponible, demande envoyée à l’admin",
       rdv
     });
@@ -120,7 +139,6 @@ exports.agentRdvs = async (req, res) => {
 };
 
 // ✅ Admin : Voir tous les RDVs (réservés par clients + planifiés par agents)
-// ✅ Admin : Voir tous les RDVs (réservés par clients + planifiés par agents)
 exports.rdvAdmin = async (req, res) => {
   try {
     const { role } = req.user;
@@ -178,6 +196,7 @@ exports.rdvAdmin = async (req, res) => {
 };
 
 
+
 // GET /rendezvous/pending-validation
 exports.getPendingForAgent = async (req, res) => {
   if (!req.user) {
@@ -205,6 +224,7 @@ exports.getPendingForAgent = async (req, res) => {
 
 
 // PUT /rendezvous/agent/valider/:id
+// PUT /rendezvous/agent/valider/:id
 exports.agentValider = async (req, res) => {
   const { id: agentId, role } = req.user;
   const { decision } = req.body; // 'valider' ou 'refuser'
@@ -214,7 +234,11 @@ exports.agentValider = async (req, res) => {
   }
 
   try {
-    const rdv = await db.RendezVous.findByPk(req.params.id);
+    const rdv = await db.RendezVous.findByPk(req.params.id, {
+      include: [
+        { model: User, as: "client", include: [{ model: Partner, as: "partner" }] }
+      ]
+    });
 
     if (!rdv || rdv.statut !== "en_attente") {
       return res.status(404).json({ message: "RDV introuvable ou déjà traité" });
@@ -224,6 +248,28 @@ exports.agentValider = async (req, res) => {
       rdv.agentId = agentId;
       rdv.statut = "valide";
       rdv.agentValidationDate = new Date();
+
+      // ✅ Récupérer les infos client
+      const clientEmail = rdv.client?.partner?.email;
+      const clientNom = rdv.client?.partner?.name || "Client";
+
+      // ✅ Envoyer un mail de confirmation
+      if (clientEmail) {
+        await sendEmailToClient({
+          to: clientEmail,
+          subject: "✅ Votre rendez-vous CETIME est confirmé",
+          html: `
+            <div style="font-family: Arial, sans-serif; font-size: 16px;">
+              <p>Bonjour ${clientNom},</p>
+              <p>Votre rendez-vous a été validé par notre équipe.</p>
+              <p><strong>Date :</strong> ${new Date(rdv.dateRdv).toLocaleString()}</p>
+              <p><strong>Durée :</strong> ${rdv.duree} minutes</p>
+              <p>Merci pour votre confiance.<br/>L'équipe CETIME</p>
+            </div>
+          `
+        });
+      }
+
     } else if (decision === "refuser") {
       rdv.statut = "annule";
     } else {
@@ -234,5 +280,28 @@ exports.agentValider = async (req, res) => {
     res.json({ message: "Mise à jour effectuée", rdv });
   } catch (error) {
     res.status(500).json({ message: "Erreur de validation", error });
+  }
+};
+
+// controllers/disponibilite.controller.js
+exports.createByAdmin = async (req, res) => {
+  const { agentId, start, end } = req.body;
+
+  if (!agentId || !start || !end) {
+    return res.status(400).json({ message: "Champs requis : agentId, start, end" });
+  }
+
+  try {
+    const dispo = await db.Disponibilite.create({
+      agentId,
+      start,
+      end,
+      createdByAdmin: true
+    });
+
+    res.status(201).json({ message: "Disponibilité ajoutée", dispo });
+  } catch (error) {
+    console.error("Erreur ajout disponibilité admin", error);
+    res.status(500).json({ message: "Erreur interne", error });
   }
 };

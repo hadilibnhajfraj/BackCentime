@@ -45,6 +45,11 @@ exports.register = async (req, res) => {
       name,
       email,
       phone: null,
+      notify_email: 'always',
+      invoice_warn: 'no-message',
+      sale_warn: 'no-message',
+      purchase_warn: 'no-message',
+      picking_warn: 'no-message',
     });
 
     // ➤ 2. Génère un nouvel ID pour res_users
@@ -60,6 +65,7 @@ exports.register = async (req, res) => {
       password: hashedPassword,
       active: false,
       partner_id: newPartner.id,
+      company_id: 1,
     });
 
     // ➤ 3. Récupérer le groupe correspondant
@@ -113,17 +119,26 @@ exports.login = async (req, res) => {
   }
 
   try {
-    // 🔍 Rechercher l'utilisateur actif (par login ou email)
+    // 🔍 Rechercher l'utilisateur actif par login OU email via partenaire
     const user = await res_users.findOne({
       where: {
         [Op.and]: [
           {
-            [Op.or]: [{ login: loginOrEmail }, { email: loginOrEmail }],
+            [Op.or]: [{ login: loginOrEmail }],
           },
           { active: true },
         ],
       },
-      include: [{ model: res_partner, as: 'partner' }],
+      include: [
+        {
+          model: res_partner,
+          as: 'partner',
+          required: false,
+          where: {
+            email: loginOrEmail,
+          },
+        },
+      ],
     });
 
     if (!user) {
@@ -133,24 +148,19 @@ exports.login = async (req, res) => {
         .json({ message: 'Utilisateur introuvable ou inactif.' });
     }
 
-    // 🔐 Vérification du mot de passe
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       console.log('❌ Mot de passe incorrect');
       return res.status(401).json({ message: 'Mot de passe incorrect.' });
     }
 
-    // 🔄 Récupérer les groupes liés à l'utilisateur
     const groupLinks = await res_users_res_groups_rel.findAll({
       where: { uid: user.id },
     });
     const groupIds = groupLinks.map((g) => g.gid);
-
     const groups = await res_groups.findAll({ where: { id: groupIds } });
 
-    // 🧑‍💼 Déterminer le rôle à partir des groupes
-    let role = 'CLIENT'; // par défaut
-
+    let role = 'CLIENT';
     for (const g of groups) {
       const groupName = g.name.toLowerCase();
       if (groupName.includes('admin')) {
@@ -162,7 +172,6 @@ exports.login = async (req, res) => {
       }
     }
 
-    // 🔐 Générer le token JWT avec rôle en majuscule
     const token = jwt.sign(
       {
         id: user.id,
@@ -175,7 +184,6 @@ exports.login = async (req, res) => {
       { expiresIn: '2h' },
     );
 
-    // ✅ Répondre avec les infos utiles
     console.log(`✅ Connexion réussie : ${user.login} avec rôle ${role}`);
 
     res.status(200).json({
@@ -198,7 +206,7 @@ exports.login = async (req, res) => {
 
 exports.getUserStats = async (req, res) => {
   try {
-    // Trouver le groupe admin
+    // 1. Récupérer le groupe 'admin'
     const adminGroup = await res_groups.findOne({
       where: { name: { [Op.iLike]: 'admin' } },
     });
@@ -207,21 +215,28 @@ exports.getUserStats = async (req, res) => {
 
     if (adminGroup) {
       const relations = await res_users_res_groups_rel.findAll({
-        where: { gid: adminGroup.id }, // clé correcte pour la relation
+        where: { gid: adminGroup.id },
         attributes: ['uid'],
       });
 
       adminUserIds = relations.map((rel) => rel.uid);
     }
 
-    // Récupérer tous les utilisateurs sauf ceux ayant un rôle admin
+    // 2. Récupérer les utilisateurs NON-admin avec leurs infos
     const users = await res_users.findAll({
       where: {
         id: {
           [Op.notIn]: adminUserIds,
         },
       },
-      attributes: ['id', 'login', 'email', 'active'],
+      attributes: ['id', 'login', 'active'],
+      include: [
+        {
+          model: res_partner,
+          attributes: ['email'],
+          as: 'partner', // 👈 assure-toi que l'alias correspond au modèle
+        },
+      ],
     });
 
     const totalUsers = users.length;
@@ -235,6 +250,7 @@ exports.getUserStats = async (req, res) => {
     res.status(500).json({ message: 'Erreur serveur' });
   }
 };
+
 /*
 exports.getUserById = async (req, res) => {
   try {
@@ -262,7 +278,14 @@ exports.getUserById = async (req, res) => {
 
     const user = await res_users.findOne({
       where: { id },
-      attributes: ['id', 'login', 'email', 'active'],
+      attributes: ['id', 'login', 'active', 'partner_id'],
+      include: [
+        {
+          model: res_partner,
+          attributes: ['email'],
+          as: 'partner', // Assure-toi d’avoir défini l’association correctement
+        },
+      ],
     });
 
     if (!user) {
@@ -372,18 +395,44 @@ exports.googleLogin = async (req, res) => {
     const payload = ticket.getPayload(); // => { email, name, sub, picture }
 
     // Vérifiez si l'utilisateur existe déjà dans votre DB
-    let user = await User.findOne({ where: { email: payload.email } });
+    let user = await res_users.findOne({ where: { email: payload.email } });
 
-    // Sinon, créez-le
     if (!user) {
-      user = await User.create({
+      const lastPartner = await res_partner.findOne({
+        order: [['id', 'DESC']],
+      });
+      const nextPartnerId = (lastPartner?.id || 0) + 1;
+
+      const partner = await res_partner.create({
+        id: nextPartnerId,
         name: payload.name,
         email: payload.email,
-        login: payload.email.split('@')[0],
-        role: 'client', // ou autre logique
-        password: 'GoogleAuth', // mettre un placeholder
-        isActive: true,
+        phone: null,
       });
+
+      const lastUser = await res_users.findOne({ order: [['id', 'DESC']] });
+      const nextUserId = (lastUser?.id || 0) + 1;
+
+      user = await res_users.create({
+        id: nextUserId,
+        login: payload.email.split('@')[0],
+        email: payload.email,
+        password: 'GoogleAuth',
+        active: true,
+        partner_id: partner.id,
+      });
+
+      // Ajout au groupe client
+      const group = await res_groups.findOne({
+        where: { name: { [Op.iLike]: 'client' } },
+      });
+
+      if (group) {
+        await res_users_res_groups_rel.create({
+          uid: user.id,
+          gid: group.id,
+        });
+      }
     }
 
     const token = generateJwt(user); // fonction custom à créer
