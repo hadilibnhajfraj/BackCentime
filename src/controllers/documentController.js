@@ -4,20 +4,24 @@ exports.createDocument = async (req, res) => {
   try {
     const file = req.file;
     const {
-      nom, type, dossierId, nom_projet, activite, date,
+      nom, type, prestationId, nom_projet, activite, date,
       entete_texte, client, adresse_client, departement,
       reference_bordereau, bureau_order, t, iat, pays, actif,
     } = req.body;
 
-    if (!type || !dossierId) {
-      return res.status(400).json({ message: "Champs requis manquants : type ou dossierId." });
+    if (!type || !prestationId) {
+      return res.status(400).json({ message: "Champs requis manquants : type ou prestationId." });
     }
 
     const cheminFichier = file ? file.path : null;
     const taille = file ? file.size : null;
 
     const document = await Document.create({
-      nom: nom || "Sans nom", type, dossierId, cheminFichier, taille,
+      nom: nom || "Sans nom",
+      type,
+      prestationId,           // <<<<<<<<<<<<<<
+      cheminFichier,
+      taille,
       nom_projet, activite, date, entete_texte, client, adresse_client,
       departement, reference_bordereau, bureau_order, t, iat, pays,
       actif: actif === "true" || actif === true
@@ -29,6 +33,7 @@ exports.createDocument = async (req, res) => {
     res.status(500).json({ message: "Erreur lors de la création du document", error: error.message });
   }
 };
+
 
 exports.getAllDocuments = async (req, res) => {
   try {
@@ -69,6 +74,20 @@ exports.getDocumentsByDossier = async (req, res) => {
     res.status(200).json(documents);
   } catch (error) {
     console.error('Erreur récupération documents par dossier:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+};
+
+exports.getDocumentsByPrestation = async (req, res) => {
+  try {
+    const { prestationId } = req.params;
+    const documents = await Document.findAll({
+      where: { prestationId },                 // <<<<<<<<<<<<<<
+      order: [['dateUpload', 'DESC']],
+    });
+    res.status(200).json(documents);
+  } catch (error) {
+    console.error('Erreur récupération documents par prestation:', error);
     res.status(500).json({ message: 'Erreur serveur', error: error.message });
   }
 };

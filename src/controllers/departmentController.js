@@ -1,4 +1,5 @@
-const { Department } = require('../models');
+const { Department, Sequelize } = require('../models');
+const { Op } = Sequelize;
 
 // ➕ Créer un département
 // ➕ Créer un département
@@ -78,3 +79,21 @@ exports.getAll = async (req, res) => {
     res.status(500).json({ message: "Erreur récupération départements", err });
   }
 };
+
+exports.listDepartments = async (req, res) => {
+  try {
+    const { active = 'true', search = '' } = req.query;
+    const where = {};
+    if (active === 'true') where.active = true;
+    if (search) where.name = { [Op.iLike]: `%${search}%` };
+
+    const rows = await Department.findAll({
+      where,
+      attributes: [['id','value'], ['name','label'], 'code'],
+      order: [['name','ASC']],
+    });
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ message: 'Erreur départements', error: e.message });
+  }
+}; 

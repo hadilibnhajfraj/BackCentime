@@ -1,15 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const dossierController = require('../controllers/dossierController');
-const { verifyToken,isClient} = require('../middleware/auth'); // 🛡️
-router.post('/', dossierController.createDossier);
-router.get("/byClient",verifyToken,isClient,  dossierController.getDossiersByClient);
-router.get('/all', dossierController.getAllDossiers);
-router.get('/:id', dossierController.getDossierById);
-router.put('/:id', dossierController.updateDossier);
-router.get("/all", dossierController.getAllDossiers);
-router.delete('/dossier/:id', dossierController.deleteDossier);
-router.get("/all", dossierController.getAllDossiers);
 
+const ctrl = require('../controllers/dossierController'); // <-- tes exports listés dans le log
+const { verifyToken, isClient } = require('../middleware/auth');
+
+// CRUD Prestations
+router.post('/', ctrl.createPrestation);
+router.get('/all', ctrl.getAllPrestations);
+router.get('/by-client', verifyToken, isClient, ctrl.getPrestationsByClient);
+router.get('/:id', ctrl.getPrestationById);
+router.put('/:id', ctrl.updatePrestation);
+router.delete('/:id', ctrl.deletePrestation);
 
 module.exports = router;

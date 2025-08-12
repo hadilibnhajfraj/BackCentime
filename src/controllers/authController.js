@@ -442,3 +442,36 @@ exports.googleLogin = async (req, res) => {
     res.status(401).json({ message: 'Token Google invalide' });
   }
 };
+exports.listClients = async (req, res) => {
+  try {
+    const { groupName = 'Client', search = '' } = req.query;
+
+    const rows = await res_users.findAll({
+      attributes: [['id', 'value'], ['login', 'label'], 'partner_id'],
+      include: [
+        {
+          model: res_groups,
+          as: 'groups',
+          required: true,
+          where: { name: { [Op.iLike]: `%${groupName}%` } },
+          attributes: [], // pas besoin de ressortir les groupes
+          through: { attributes: [] },
+        },
+      ],
+      where: search
+        ? {
+            [Op.or]: [
+              { login: { [Op.iLike]: `%${search}%` } },
+              { email: { [Op.iLike]: `%${search}%` } },
+            ],
+          }
+        : undefined,
+      order: [['login', 'ASC']],
+      limit: 100,
+    });
+
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ message: 'Erreur clients', error: e.message });
+  }
+};

@@ -9,6 +9,7 @@ const departmentRoutes = require('./routes/departmentRouter');
 const rendezvousRoutes = require('./routes/rendezVousRoutes');
 const disponibiliteRoutes = require('./routes/disponibiliteRouter');
 const notificationRoutes = require('./routes/notificationRoutes');
+const meetRoutes = require('./routes/lookupsRoutes');
 const app = express();
 
 // Middleware
@@ -25,4 +26,5 @@ app.use('/dossier', dossierRouter);
 app.use('/rendezvous', rendezvousRoutes);
 app.use('/disponibilite', disponibiliteRoutes);
 app.use('/notifications', notificationRoutes);
+app.use('/routes', meetRoutes);
 module.exports = app;
