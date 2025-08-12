@@ -17,11 +17,12 @@ exports.createDocument = async (req, res) => {
     const taille = file ? file.size : null;
 
     const document = await Document.create({
-      nom: nom || "Sans nom",
+      nom: nom || (file?.originalname ?? "Sans nom"),
       type,
-      prestationId,           // <<<<<<<<<<<<<<
+      prestationId,
       cheminFichier,
       taille,
+      mimeType: file?.mimetype,
       nom_projet, activite, date, entete_texte, client, adresse_client,
       departement, reference_bordereau, bureau_order, t, iat, pays,
       actif: actif === "true" || actif === true
@@ -33,6 +34,52 @@ exports.createDocument = async (req, res) => {
     res.status(500).json({ message: "Erreur lors de la création du document", error: error.message });
   }
 };
+
+// === Multi-fichiers
+exports.createDocumentsBulk = async (req, res) => {
+  try {
+    const files = req.files || [];
+    const {
+      type, prestationId,
+      nom_projet, activite, date, entete_texte,
+      client, adresse_client, departement,
+      reference_bordereau, bureau_order, t, iat, pays, actif
+    } = req.body;
+
+    if (!prestationId) {
+      return res.status(400).json({ message: "prestationId est requis." });
+    }
+    if (!files.length) {
+      return res.status(400).json({ message: "Aucun fichier reçu (champ 'files')." });
+    }
+
+    const common = {
+      type: type || 'document',
+      prestationId,
+      nom_projet, activite, date, entete_texte, client, adresse_client,
+      departement, reference_bordereau, bureau_order, t, iat, pays,
+      actif: actif === "true" || actif === true
+    };
+
+    const created = await Promise.all(
+      files.map((f) =>
+        Document.create({
+          ...common,
+          nom: f.originalname || 'Sans nom',
+          cheminFichier: f.path,
+          taille: f.size,
+          mimeType: f.mimetype
+        })
+      )
+    );
+
+    return res.status(201).json({ count: created.length, documents: created });
+  } catch (error) {
+    console.error("Erreur création documents (bulk):", error);
+    return res.status(500).json({ message: "Erreur lors de la création des documents", error: error.message });
+  }
+};
+
 
 
 exports.getAllDocuments = async (req, res) => {
