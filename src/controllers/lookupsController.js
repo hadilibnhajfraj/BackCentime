@@ -51,22 +51,58 @@ exports.listDepartments = async (req, res) => {
 
 exports.usersByGroup = async (req, res) => {
   try {
-    const { group = 'client', groupId } = req.query;
+    const {
+      group = 'client',    // ex: 'agent', 'client', 'admin'
+      groupId,             // ex: 12
+      q,                   // filtre texte optionnel
+      limit = 200
+    } = req.query;
 
-    const whereGroup = groupId
-      ? { id: Number(groupId) }
-      : { name: { [Op.iLike]: `%${group}%` } };
+    // ---- Construire le filtre du groupe
+    let whereGroup;
+    if (groupId) {
+      whereGroup = { id: Number(groupId) };
+    } else if (group) {
+      // match insensible à la casse (+ wildcards)
+      whereGroup = { name: { [Op.iLike]: `%${group}%` } };
+    } else {
+      whereGroup = { name: { [Op.iLike]: '%client%' } };
+    }
 
-    // 🔎 === Ajoute CE BLOC ICI (juste avant le findAll) ===
-    const gid = Number(groupId || 9999); // 999 = "Groupe pour les clients" (d’après ta capture)
-    const countRel = await db.res_users_res_groups_rel.count({
-      where: { gid },
-    });
-    console.log('Relations pour gid=', gid, ' => ', countRel);
-    // ======================================================
+    // ---- Logs utiles (compte des relations)
+    if (groupId) {
+      const countRel = await db.res_users_res_groups_rel.count({
+        where: { gid: Number(groupId) },
+      });
+      console.log(`[usersByGroup] gid=${groupId} → relations=${countRel}`);
+    } else {
+      const foundGroups = await db.res_groups.findAll({
+        where: whereGroup,
+        attributes: ['id', 'name'],
+      });
+      const ids = foundGroups.map(g => g.id);
+      if (ids.length) {
+        const countRel = await db.res_users_res_groups_rel.count({
+          where: { gid: { [Op.in]: ids } },
+        });
+        console.log(
+          `[usersByGroup] groups=[${foundGroups.map(g => g.name).join(', ')}] → relations=${countRel}`
+        );
+      } else {
+        console.log(`[usersByGroup] aucun groupe correspondant à "${group}"`);
+      }
+    }
 
+    // ---- Requête principale
     const users = await db.res_users.findAll({
       attributes: ['id', 'login', 'active', 'partner_id'],
+      ...(q && {
+        where: {
+          [Op.or]: [
+            { login: { [Op.iLike]: `%${q}%` } },
+          ],
+        },
+      }),
       include: [
         {
           model: db.res_groups,
@@ -74,6 +110,7 @@ exports.usersByGroup = async (req, res) => {
           attributes: [],
           through: { attributes: [] },
           where: whereGroup,
+          required: true, // ← ne renvoie que les users appartenant au(x) groupe(s) ciblé(s)
         },
         {
           model: db.res_partner,
@@ -82,29 +119,25 @@ exports.usersByGroup = async (req, res) => {
         },
       ],
       order: [[{ model: db.res_partner, as: 'partner' }, 'name', 'ASC']],
-      limit: 200,
+      limit: Number(limit) || 200,
     });
 
-    // (optionnel) autre log utile
-    console.log('usersByGroup -> users.length =', users.length);
+    console.log('[usersByGroup] users.length =', users.length);
 
-    const data = users.map((u) => ({
+    const data = users.map(u => ({
       id: u.id,
       value: u.id,
       label: u.partner?.name || u.login || `user_${u.id}`,
       email: u.partner?.email || null,
       partner_id: u.partner_id,
       partner_name: u.partner?.name || null,
-      address:
-        [u.partner?.street, u.partner?.city].filter(Boolean).join(', ') || null,
+      address: [u.partner?.street, u.partner?.city].filter(Boolean).join(', ') || null,
       active: u.active,
     }));
 
     res.json(data);
   } catch (e) {
-    console.error('usersByGroup:', e);
-    res
-      .status(500)
-      .json({ error: 'Erreur récupération utilisateurs (clients) par groupe' });
+    console.error('usersByGroup error:', e);
+    res.status(500).json({ error: "Erreur récupération utilisateurs par groupe" });
   }
 };

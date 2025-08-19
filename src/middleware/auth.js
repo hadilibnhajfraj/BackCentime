@@ -13,7 +13,7 @@ const verifyToken = async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded; // Contient id, role, iat, exp
-    console.log("✅ Token décodé:", decoded);
+    console.log('✅ Token décodé:', decoded);
     next();
   } catch (err) {
     return res.status(403).json({ message: 'Token invalide ou expiré' });
@@ -21,19 +21,25 @@ const verifyToken = async (req, res, next) => {
 };
 
 const isClient = (req, res, next) => {
-  const role = (req.user?.role || "").toUpperCase();
-  if (role === "CLIENT") return next();
-  return res.status(403).json({ message: "⛔ Accès réservé aux clients." });
+  const role = (req.user?.role || '').toUpperCase();
+  if (role === 'CLIENT') return next();
+  return res.status(403).json({ message: '⛔ Accès réservé aux clients.' });
 };
 
 const isAdmin = (req, res, next) => {
-  const role = (req.user?.role || "").toUpperCase();
-  if (role === "ADMIN") return next();
-  return res.status(403).json({ message: "⛔ Accès réservé aux administrateurs." });
+  const role = (req.user?.role || '').toUpperCase();
+  if (role === 'ADMIN') return next();
+  return res
+    .status(403)
+    .json({ message: '⛔ Accès réservé aux administrateurs.' });
 };
 const isAgent = (req, res, next) => {
-  const role = (req.user?.role || "").toUpperCase();
-  if (role === "AGENT") return next();
-  return res.status(403).json({ message: "⛔ Accès réservé aux agents." });
+  const role = (req.user?.role || '').toUpperCase();
+  // ✅ Accepte les deux libellés
+  if (role === 'AGENT' || role === 'EMPLOYEE') return next();
+  return res
+    .status(403)
+    .json({ message: '⛔ Accès réservé aux agents/employés.' });
 };
-module.exports = { verifyToken, isClient, isAdmin ,isAgent};
+
+module.exports = { verifyToken, isClient, isAdmin, isAgent };

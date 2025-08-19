@@ -20,3 +20,26 @@ exports.getAllDisponibilites = async (req, res) => {
     res.status(500).json({ message: "Erreur lors de la récupération", error });
   }
 };
+// NEW: lister les dispos d’un agent
+exports.listByAgent = async (req, res) => {
+  try {
+    const { agentId } = req.params;                 // id dans l’URL
+    const { id: userId, role } = req.user || {};
+    const isAdmin = (role || '').toUpperCase() === 'ADMIN';
+
+    // sécurité: un agent ne peut voir que ses propres dispos
+    if (!isAdmin && Number(agentId) !== Number(userId)) {
+      return res.status(403).json({ message: '⛔ Accès refusé' });
+    }
+
+    const rows = await db.Disponibilite.findAll({
+      where: { agentId: Number(agentId) },
+      order: [['start', 'ASC']],
+    });
+
+    res.json(rows);
+  } catch (e) {
+    console.error('listByAgent error:', e);
+    res.status(500).json({ message: 'Erreur serveur' });
+  }
+};

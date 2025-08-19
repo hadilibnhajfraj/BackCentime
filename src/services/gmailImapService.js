@@ -1,18 +1,13 @@
-// services/gmailImapService.js
+// src/services/gmailImapService.js
 const imaps = require('imap-simple');
 const { google } = require('googleapis');
 
-async function getAccessTokenFromRefresh({
-  clientId,
-  clientSecret,
-  redirectUri,
-  refreshToken,
-}) {
+async function getAccessTokenFromRefresh({ clientId, clientSecret, redirectUri, refreshToken }) {
   const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
   oauth2Client.setCredentials({ refresh_token: refreshToken });
-  const { token } = await oauth2Client.getAccessToken(); // auto refresh
+  const { token } = await oauth2Client.getAccessToken(); // refresh auto
   if (!token) throw new Error('No access token returned');
-  return token; // string
+  return token;
 }
 
 function buildXOAuth2Token(userEmail, accessToken) {
@@ -27,13 +22,11 @@ exports.getUnreadCount = async (req, res) => {
       GMAIL_CLIENT_ID,
       GMAIL_CLIENT_SECRET,
       GMAIL_REDIRECT_URI,
-      GMAIL_REFRESH_TOKEN, // ⚠️ mets ICI le **NOUVEAU** RT
+      GMAIL_REFRESH_TOKEN,
     } = process.env;
 
-    // Log de contrôle (suffixe seulement)
-    console.log('RT suffix:', '****' + String(GMAIL_REFRESH_TOKEN).slice(-6));
+    console.log('RT suffix:', '****' + String(GMAIL_REFRESH_TOKEN || '').slice(-6));
 
-    // 1) access_token frais via googleapis
     const accessToken = await getAccessTokenFromRefresh({
       clientId: GMAIL_CLIENT_ID,
       clientSecret: GMAIL_CLIENT_SECRET,
@@ -41,14 +34,12 @@ exports.getUnreadCount = async (req, res) => {
       refreshToken: GMAIL_REFRESH_TOKEN,
     });
 
-    // 2) Transformer en token XOAUTH2 (SASL) pour IMAP
     const xoauth2Token = buildXOAuth2Token(GMAIL_USER, accessToken);
 
-    // 3) Connexion IMAP avec imap-simple
     const config = {
       imap: {
         user: GMAIL_USER,
-        xoauth2: xoauth2Token,   // <= on passe la chaîne XOAUTH2, pas un mot de passe
+        xoauth2: xoauth2Token,
         host: 'imap.gmail.com',
         port: 993,
         tls: true,

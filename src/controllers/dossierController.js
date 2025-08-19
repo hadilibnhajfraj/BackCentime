@@ -2,24 +2,24 @@
 const { Op, QueryTypes } = require('sequelize');
 const util = require('util');
 const db = require('../models');
+
 const Prestation = db.Prestation;
 
-// ===== helpers communs =====
+/* --------------------------------- Utils --------------------------------- */
+
 const intOrNull = (v) =>
   v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
 
-// Résout l'activité vers un product_template.id
 async function resolveActivityTemplateId({ db, activityId, activite }) {
-  // 1) id direct → product_template.id (si modèle dispo)
+  // 1) id direct
   let candidate = intOrNull(activityId);
   if (candidate && db.product_template) {
-    const exists = await db.product_template
+    const ok = await db.product_template
       .findByPk(candidate, { attributes: ['id'] })
       .catch(() => null);
-    if (exists) return candidate;
+    if (ok) return candidate;
   }
-
-  // 2) name sur product_template (si modèle dispo)
+  // 2) par nom
   if (activite && db.product_template) {
     const tpl = await db.product_template
       .findOne({
@@ -29,10 +29,9 @@ async function resolveActivityTemplateId({ db, activityId, activite }) {
       .catch(() => null);
     if (tpl?.id) return tpl.id;
   }
-
-  // 3) SQL brute: default_code (product_product) -> product_template.id
+  // 3) par code article (product_product.default_code)
   if (activite && db.sequelize) {
-    const q = `
+    const sql = `
       SELECT pt.id
       FROM product_product pp
       JOIN product_template pt ON pt.id = pp.product_tmpl_id
@@ -40,42 +39,31 @@ async function resolveActivityTemplateId({ db, activityId, activite }) {
       LIMIT 1
     `;
     const rows = await db.sequelize
-      .query(q, {
+      .query(sql, {
         replacements: { code: String(activite).trim() },
         type: db.Sequelize.QueryTypes.SELECT,
       })
       .catch(() => []);
     if (rows?.[0]?.id) return rows[0].id;
   }
-
   // 4) fallback .env
   const envAct = intOrNull(process.env.DEFAULT_ACTIVITY_ID);
-  if (envAct) {
-    if (db.product_template) {
-      const ok = await db.product_template
-        .findByPk(envAct, { attributes: ['id'] })
-        .catch(() => null);
-      if (ok) return envAct;
-    } else {
-      return envAct; // pas de modèle => on fait confiance à l'env
-    }
-  }
+  if (envAct) return envAct;
   return null;
 }
 
-// Résout un id analytique existant (body -> env -> 1er existant) ou null
 async function resolveAnalyticId(db, rawVal) {
   const toInt = (v) =>
     v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
 
-  async function existsInDB(id) {
+  async function exists(id) {
     if (!id) return false;
     try {
       const rows = await db.sequelize.query(
         'SELECT id FROM account_analytic_account WHERE id = :id LIMIT 1',
         { replacements: { id }, type: db.Sequelize.QueryTypes.SELECT },
       );
-      return !!(rows && rows[0]?.id);
+      return !!rows?.[0]?.id;
     } catch {
       return false;
     }
@@ -83,13 +71,13 @@ async function resolveAnalyticId(db, rawVal) {
 
   // a) body
   let candidate = toInt(rawVal);
-  if (await existsInDB(candidate)) return candidate;
+  if (await exists(candidate)) return candidate;
 
-  // b) .env
+  // b) env
   const envVal = toInt(process.env.DEFAULT_ANALYTIC_ACCOUNT_ID);
-  if (await existsInDB(envVal)) return envVal;
+  if (await exists(envVal)) return envVal;
 
-  // c) auto-pick: prendre un id existant
+  // c) pick first
   try {
     const rows = await db.sequelize.query(
       'SELECT id FROM account_analytic_account ORDER BY id LIMIT 1',
@@ -98,46 +86,58 @@ async function resolveAnalyticId(db, rawVal) {
     if (rows?.[0]?.id) return rows[0].id;
   } catch {}
 
-  // d) rien trouvé
   return null;
 }
 
-// Vérifie office_order_id ; sinon env ; sinon null
 async function resolveOfficeOrderId(db, rawVal) {
   const candidate = intOrNull(rawVal);
 
-  async function existsInDB(id) {
+  async function exists(id) {
     if (!id) return false;
     try {
       const rows = await db.sequelize.query(
         'SELECT id FROM office_order WHERE id = :id LIMIT 1',
         { replacements: { id }, type: db.Sequelize.QueryTypes.SELECT },
       );
-      return !!(rows && rows[0]?.id);
+      return !!rows?.[0]?.id;
     } catch {
       return false;
     }
   }
 
-  // a) valeur envoyée
-  if (await existsInDB(candidate)) return candidate;
+  if (await exists(candidate)) return candidate;
 
-  // b) fallback .env
   const envVal = intOrNull(process.env.DEFAULT_OFFICE_ORDER_ID);
-  if (await existsInDB(envVal)) return envVal;
+  if (await exists(envVal)) return envVal;
 
-  // c) auto-pick (facultatif) — décommente pour choisir le plus petit id existant
-  // try {
-  //   const rows = await db.sequelize.query(
-  //     'SELECT id FROM office_order ORDER BY id LIMIT 1',
-  //     { type: db.Sequelize.QueryTypes.SELECT }
-  //   );
-  //   if (rows?.[0]?.id) return rows[0].id;
-  // } catch {}
-
-  // d) rien trouvé
-  return null;
+  return null; // OK si la colonne n’est pas NOT NULL en DB
 }
+
+// normalisation simple pour la liste générique
+function normalizePrest(p) {
+  const plain = p.get ? p.get({ plain: true }) : p;
+  return {
+    id: plain.id,
+    prestation: plain.prestation ?? null,
+    description: plain.name_primary ?? plain.description ?? null,
+    department_name: plain?.department?.name ?? plain.department_name ?? null,
+    partner_name: plain?.client?.name ?? plain.partner_name ?? null,
+    iat: plain.iat ?? null,
+    responsible_name: plain.responsible_name ?? null,
+    chef_projet: plain.responsible_name ?? plain.chef_projet ?? null,
+    intervenants: plain.intervenants ?? plain.intervenats ?? null,
+    date: plain.date ?? null,
+    date_start_prevue: plain.date_start_prevue ?? null,
+    activity_name: plain?.activity?.name ?? plain.activity_name ?? null,
+    commercial: plain.commercial ?? null,
+    state: plain.state || 'Demande',
+    documents: plain.documents || [],
+    department: plain.department || null,
+    activity: plain.activity || null,
+  };
+}
+
+/* ------------------------------ Create (POST) ----------------------------- */
 
 exports.createPrestation = async (req, res) => {
   try {
@@ -147,17 +147,13 @@ exports.createPrestation = async (req, res) => {
     );
 
     let {
-      // IDs directs
       activityId: _activityId,
       departmentId: _departmentId,
       clientId: _clientId,
-
-      // Libellés fallback
       activite,
       departement,
       client,
 
-      // Champs écran
       nom_projet,
       date,
       entete_texte,
@@ -174,7 +170,6 @@ exports.createPrestation = async (req, res) => {
       type,
       adresse_client,
 
-      // optionnel
       analyticAccountId: _analyticAccountId,
     } = req.body;
 
@@ -184,22 +179,13 @@ exports.createPrestation = async (req, res) => {
         .json({ message: "Le champ 'nom_projet' est requis." });
     }
 
-    // ---------- IDs init ----------
     let activityId = _activityId ?? null;
     let departmentId = _departmentId ?? null;
     let partnerId = _clientId ?? null;
-    console.log('[Prestation] IDs init →', {
-      _activityId,
-      _departmentId,
-      _clientId,
-      activite,
-      departement,
-      client,
-    });
 
     // Dept par libellé si besoin
-    if (!departmentId && departement) {
-      const dep = await db.Department?.findOne({
+    if (!departmentId && departement && db.Department) {
+      const dep = await db.Department.findOne({
         where: {
           [Op.or]: [
             { code: { [Op.iLike]: departement } },
@@ -211,19 +197,18 @@ exports.createPrestation = async (req, res) => {
       departmentId = dep?.id ?? null;
     }
 
-    // Client par libellé (si un jour partnerId est relié)
-    if (!partnerId && client) {
-      const partner = await db.res_partner?.findOne({
+    // Client par libellé si un jour tu relies res_partner
+    if (!partnerId && client && db.res_partner) {
+      const partner = await db.res_partner.findOne({
         where: { name: { [Op.iLike]: client } },
         attributes: ['id'],
       });
       partnerId = partner?.id ?? null;
     }
 
-    // ---------- countryId robuste ----------
+    // country
     const toIntOrNull = (v) => (/^\d+$/.test(String(v)) ? Number(v) : null);
     let countryId = null;
-
     if (pays != null && pays !== '') {
       countryId = toIntOrNull(pays);
       if (countryId == null) {
@@ -254,23 +239,9 @@ exports.createPrestation = async (req, res) => {
         !Number.isNaN(envCountry) && envCountry > 0 ? envCountry : 223;
     }
 
-    // ---------- office_order_id : vérifier l'existence ----------
     const officeOrderId = await resolveOfficeOrderId(db, bureau_order);
-    console.log('[Prestation] Résolution pays/compte/bureau →', {
-      pays,
-      countryId,
-      bureau_order,
-      officeOrderId,
-    });
-
-    // ---------- analytic_account_id (optionnel + vérif existence) ----------
     const analyticAccountId = await resolveAnalyticId(db, _analyticAccountId);
-    console.log('[Prestation] Analytic résolu →', {
-      body: _analyticAccountId,
-      resolved: analyticAccountId,
-    });
 
-    // Si ta colonne analytic_account_id est NOT NULL en DB, active ce garde-fou :
     if (analyticAccountId == null) {
       return res.status(400).json({
         message:
@@ -279,30 +250,21 @@ exports.createPrestation = async (req, res) => {
       });
     }
 
-    // ---------- activité -> product_template.id ----------
     const PRIVACY_DEFAULT = 'employees';
     const resolvedActivityId = await resolveActivityTemplateId({
       db,
       activityId,
       activite,
     });
-    console.log('[Prestation] Résolution activité →', {
-      activityId,
-      activite,
-      resolvedActivityId,
-    });
-
     if (!resolvedActivityId) {
       return res.status(400).json({
         message:
-          "Activité invalide: l'id/libellé ne correspond à aucun 'product_template'. " +
-          'Envoyez un id de product_template valide, un code article existant (product_product.default_code) ' +
-          'ou définissez DEFAULT_ACTIVITY_ID dans le .env.',
+          "Activité invalide: l'id/libellé ne correspond à aucun 'product_template'.",
         details: { activityIdRecu: activityId, activiteRecue: activite },
       });
     }
 
-    // (Optionnel) validation departmentId contre une table FK (ex: hr_department)
+    // Valider departmentId si modèle hr_department présent
     let resolvedDeptId = departmentId;
     if (resolvedDeptId != null && db.hr_department) {
       const depExists = await db.hr_department.findByPk(resolvedDeptId, {
@@ -323,14 +285,6 @@ exports.createPrestation = async (req, res) => {
       resolvedDeptId = dep?.id ?? null;
     }
 
-    // Si ta colonne office_order_id est NOT NULL chez toi, ajoute un garde :
-    // if (officeOrderId == null) {
-    //   return res.status(400).json({
-    //     message: "Bureau d'ordre inexistant. Renseignez un 'office_order_id' valide ou configurez DEFAULT_OFFICE_ORDER_ID dans le .env."
-    //   });
-    // }
-
-    // ---------- INSERT ----------
     const insertData = {
       aliasModel: 'project.task',
       activityId: resolvedActivityId,
@@ -346,7 +300,7 @@ exports.createPrestation = async (req, res) => {
       date,
       entete: entete_texte || '',
       referenceBordereau: reference_bordereau || null,
-      officeOrderId, // OK si null (sauf si NOT NULL en DB)
+      officeOrderId,
       iat: iat ?? null,
       prestation: numPrestation ?? null,
       responsibleId: chefProjet ?? null,
@@ -359,8 +313,7 @@ exports.createPrestation = async (req, res) => {
       '[Prestation] INSERT →',
       util.inspect(insertData, { depth: null, colors: false }),
     );
-
-    const newPrest = await db.Prestation.create(insertData);
+    const newPrest = await Prestation.create(insertData);
     return res.status(201).json(newPrest);
   } catch (error) {
     console.error('Erreur création prestation :', {
@@ -378,21 +331,169 @@ exports.createPrestation = async (req, res) => {
   }
 };
 
-exports.getAllPrestations = async (req, res) => {
+/* ------------------------- Résumé pour les compteurs ---------------------- */
+/** GET /dossier/prestations/summary -> { counts:[{state,count}], total } */
+exports.summary = async (req, res) => {
   try {
-    const Prestations = await Prestation.findAll();
-    res.json(Prestations);
-  } catch (error) {
-    res.status(500).json({ message: 'Erreur récupération Prestations', error });
+    const rows = await Prestation.findAll({
+      attributes: [
+        'state',
+        [db.Sequelize.fn('COUNT', db.Sequelize.col('id')), 'count'],
+      ],
+      group: ['state'],
+      raw: true,
+    });
+    const counts = rows.map((r) => ({
+      state: String(r.state || '').toLowerCase(),
+      count: Number(r.count || 0),
+    }));
+    const total = counts.reduce((s, r) => s + r.count, 0);
+    res.json({ counts, total });
+  } catch (e) {
+    console.error('summary error', e);
+    res.status(500).json({ message: 'Erreur summary', error: String(e) });
   }
 };
 
+/* ----------------------- Liste paginée filtrée par état ------------------- */
+/** GET /dossier/prestations?state=closed&page=1&pageSize=10&q=... */
+// Prestation.controller.js
+
+// états techniques réellement présents en DB
+const ALLOWED_STATES = new Set(['closed', 'done', 'open', 'draft', 'rejected']);
+
+exports.listByState = async (req, res) => {
+  try {
+    const state = String(req.query.state || '').toLowerCase();
+
+    if (!state) {
+      return res
+        .status(400)
+        .json({ message: "Paramètre 'state' manquant. Ex: ?state=closed" });
+    }
+    if (!ALLOWED_STATES.has(state)) {
+      return res.status(400).json({
+        message: "Paramètre 'state' invalide.",
+        allowed: Array.from(ALLOWED_STATES),
+      });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.pageSize, 10) || 10),
+    );
+    const q = String(req.query.q || '').trim();
+    const offset = (page - 1) * pageSize;
+
+    let where = `pp.state = :state`;
+    const repl = { state, limit: pageSize, offset };
+    if (q) {
+      where += ` AND (pp.prestation ILIKE :q OR pp.name_primary ILIKE :q)`;
+      repl.q = `%${q}%`;
+    }
+
+    const rowsSql = `
+      SELECT
+        pp.id, pp.prestation, pp.name_primary, pp.date, pp.iat,
+        pp.reference_bordereau, pp.department_id, pp.activity_id,
+        d.name  AS department_name,
+        pt.name AS activity_name
+      FROM prestation_prestation pp
+      LEFT JOIN hr_department   d  ON d.id  = pp.department_id
+      LEFT JOIN product_template pt ON pt.id = pp.activity_id
+      WHERE ${where}
+      ORDER BY pp.id DESC
+      LIMIT :limit OFFSET :offset
+    `;
+    const countSql = `
+      SELECT COUNT(*)::int AS count
+      FROM prestation_prestation pp
+      WHERE ${where}
+    `;
+
+    const rows = await db.sequelize.query(rowsSql, {
+      replacements: repl,
+      type: QueryTypes.SELECT,
+    });
+    const count = await db.sequelize
+      .query(countSql, { replacements: repl, type: QueryTypes.SELECT })
+      .then((r) => r?.[0]?.count ?? 0);
+
+    res.json({ rows, count, page, pageSize });
+  } catch (e) {
+    console.error('listByState error:', e);
+    res.status(500).json({ message: 'Erreur listByState', error: String(e) });
+  }
+};
+
+/* ---------------------------- Liste générique ----------------------------- */
+/** GET /prestations?q=...&state=...&limit=...&offset=...&order=id:DESC */
+exports.listPrestations = async (req, res) => {
+  try {
+    const { q, state, limit = 1000, offset = 0, order = 'id:DESC' } = req.query;
+
+    const where = {};
+    if (state) where.state = state;
+    if (q && String(q).trim()) {
+      const s = `%${String(q).trim()}%`;
+      where[Op.or] = [
+        { prestation: { [Op.iLike]: s } },
+        { name_primary: { [Op.iLike]: s } },
+        { desctiption: { [Op.iLike]: s } },
+        { iat: { [Op.iLike]: s } },
+      ];
+    }
+
+    let orderArr = [['id', 'DESC']];
+    if (order) {
+      const [col, dir] = String(order).split(':');
+      if (col) orderArr = [[col, (dir || 'DESC').toUpperCase()]];
+    }
+
+    const rows = await Prestation.findAll({
+      where,
+      include: [
+        { model: db.Department, as: 'department', attributes: ['id', 'name'] },
+        { model: db.Activity, as: 'activity', attributes: ['id', 'name'] },
+        {
+          model: db.Document,
+          as: 'documents',
+          attributes: ['id', 'type', 'cheminFichier', 'actif', 'date'],
+        },
+      ],
+      order: orderArr,
+      limit: Number(limit),
+      offset: Number(offset),
+    });
+
+    res.json(rows.map(normalizePrest));
+  } catch (err) {
+    console.error('listPrestations error:', err);
+    res
+      .status(500)
+      .json({ message: 'Erreur lors de la récupération des prestations.' });
+  }
+};
+
+/* --------------------------- CRUD + par client ---------------------------- */
+
 exports.getPrestationById = async (req, res) => {
   try {
-    const Prestation = await Prestation.findByPk(req.params.id);
-    if (!Prestation)
-      return res.status(404).json({ message: 'Prestation non trouvé' });
-    res.json(Prestation);
+    const prest = await Prestation.findByPk(req.params.id, {
+      include: [
+        {
+          model: db.Document,
+          as: 'documents',
+          attributes: ['id', 'type', 'cheminFichier', 'actif', 'date'],
+        },
+        { model: db.Department, as: 'department', attributes: ['id', 'name'] },
+        { model: db.Activity, as: 'activity', attributes: ['id', 'name'] },
+      ],
+    });
+    if (!prest)
+      return res.status(404).json({ message: 'Prestation non trouvée' });
+    res.json(normalizePrest(prest));
   } catch (error) {
     res.status(500).json({ message: 'Erreur récupération Prestation', error });
   }
@@ -400,12 +501,12 @@ exports.getPrestationById = async (req, res) => {
 
 exports.updatePrestation = async (req, res) => {
   try {
-    const Prestation = await Prestation.findByPk(req.params.id);
-    if (!Prestation)
-      return res.status(404).json({ message: 'Prestation non trouvé' });
+    const prest = await Prestation.findByPk(req.params.id);
+    if (!prest)
+      return res.status(404).json({ message: 'Prestation non trouvée' });
 
-    await Prestation.update(req.body);
-    res.json(Prestation);
+    await prest.update(req.body);
+    res.json(prest);
   } catch (error) {
     res.status(500).json({ message: 'Erreur mise à jour Prestation', error });
   }
@@ -413,55 +514,30 @@ exports.updatePrestation = async (req, res) => {
 
 exports.deletePrestation = async (req, res) => {
   try {
-    const Prestation = await Prestation.findByPk(req.params.id);
-    if (!Prestation)
-      return res.status(404).json({ message: 'Prestation non trouvé' });
+    const prest = await Prestation.findByPk(req.params.id);
+    if (!prest)
+      return res.status(404).json({ message: 'Prestation non trouvée' });
 
-    await Prestation.destroy();
-    res.json({ message: 'Prestation supprimé' });
+    await prest.destroy();
+    res.json({ message: 'Prestation supprimée' });
   } catch (error) {
     res.status(500).json({ message: 'Erreur suppression Prestation', error });
   }
 };
+
 exports.getPrestationsByClient = async (req, res) => {
   try {
-    const role = req.user.role?.toUpperCase();
-    const clientId = String(req.user.id);
-
-    console.log('🔐 Utilisateur :', req.user);
+    const role = req.user?.role?.toUpperCase();
+    const clientId = String(req.user?.id || '');
 
     if (role !== 'CLIENT') {
       return res.status(403).json({ message: 'Accès réservé aux clients' });
     }
 
-    const Prestations = await Prestation.findAll({
-      where: { client: clientId },
-    });
-
-    res.status(200).json(Prestations);
+    const rows = await Prestation.findAll({ where: { client: clientId } });
+    res.status(200).json(rows.map(normalizePrest));
   } catch (err) {
-    console.error('❌ Erreur getPrestationsByClient:', err);
+    console.error('getPrestationsByClient error:', err);
     res.status(500).json({ error: 'Erreur serveur' });
-  }
-};
-exports.getAllPrestations = async (req, res) => {
-  try {
-    const Prestations = await Prestation.findAll({
-      include: [
-        {
-          model: db.Document,
-          as: 'documents',
-          attributes: ['id', 'type', 'cheminFichier', 'actif', 'date'],
-        },
-      ],
-      order: [['id', 'DESC']],
-    });
-
-    res.status(200).json(Prestations);
-  } catch (error) {
-    console.error('Erreur lors de la récupération des Prestations :', error);
-    res
-      .status(500)
-      .json({ error: 'Erreur lors de la récupération des Prestations' });
   }
 };

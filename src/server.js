@@ -1,8 +1,8 @@
 // src/server.js
-require('dotenv').config();
+require('dotenv').config(); // DOIT être tout en haut
+
 const app = require('./app');
-const { sequelize, Document, RendezVous, Disponibilite } = require('./models'); 
-// ^ On ne récupère QUE les modèles custom à synchroniser
+const { sequelize, Document, RendezVous, Disponibilite } = require('./models');
 
 const PORT = process.env.PORT || 4000;
 
@@ -11,8 +11,7 @@ const PORT = process.env.PORT || 4000;
     await sequelize.authenticate();
     console.log('✅ Connexion PostgreSQL réussie.');
 
-    // ❌ Ne JAMAIS sync les tables Odoo (res_*, hr_department, activity_activity, prestation_prestation)
-    // ✅ Sync UNIQUEMENT les tables custom de ton app
+    // ⚠️ Ne jamais sync les tables Odoo
     await Promise.all([
       Document.sync({ alter: true }),
       RendezVous.sync({ alter: true }),
