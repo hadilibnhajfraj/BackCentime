@@ -12,7 +12,7 @@ router.post('/affecter/admin', verifyToken, isAdmin, rdvCtrl.createByAdmin);
 router.post("/confirmer/:id", verifyToken, isAdmin, rdvCtrl.confirmer);
 router.put("/annuler/:id", verifyToken, isAdmin, rdvCtrl.annuler);
 router.get('/admin', verifyToken, isAdmin, rdvCtrl.rdvAdmin);
-
+router.put('/:id/reassign', verifyToken, isAdmin, rdvCtrl.reassign);
 // Agent
 router.get("/agent/:agentId", verifyToken, isAgent, rdvCtrl.agentRdvs);
 router.get("/pending-validation", verifyToken, isAgent, rdvCtrl.getPendingForAgent);

@@ -319,3 +319,69 @@ exports.listByAgent = async (req, res) => {
     res.status(500).json({ message: 'Erreur serveur' });
   }
 };
+/** ✅ ADMIN: Ré-affecter l’agent d’un RDV (et notifier le client) */
+exports.reassign = async (req, res) => {
+  try {
+    const role = (req.user?.role || '').toUpperCase();
+    if (role !== 'ADMIN') {
+      return res.status(403).json({ message: "⛔ Accès réservé à l'administrateur" });
+    }
+
+    const { id } = req.params;         // id du RDV
+    const { agentId } = req.body;      // nouvel agent
+    if (!agentId) return res.status(400).json({ message: 'agentId requis' });
+
+    const rdv = await RendezVous.findByPk(id, {
+      include: [
+        { model: User, as: 'client', include: [{ model: Partner, as: 'partner' }] },
+        { model: User, as: 'agent',  include: [{ model: Partner, as: 'partner' }] },
+      ],
+    });
+    if (!rdv) return res.status(404).json({ message: 'Rendez-vous non trouvé' });
+
+    // maj agent
+    rdv.agentId = agentId;
+    // si le RDV était en attente on le confirme
+    if (rdv.statut === 'en_attente') rdv.statut = 'valide';
+    await rdv.save();
+
+    // recharger nouvel agent (nom/email)
+    const newAgent = await User.findByPk(agentId, {
+      include: [{ model: Partner, as: 'partner' }],
+    });
+
+    // ✉️ Email client
+    const clientEmail = rdv?.client?.partner?.email;
+    if (clientEmail) {
+      await sendEmailToClient({
+        to: clientEmail,
+        subject: '✅ Mise à jour de votre rendez-vous CETIME',
+        html: `
+          <div style="font-family: Arial, sans-serif; font-size: 16px;">
+            <p>Bonjour ${rdv?.client?.partner?.name || 'Client'},</p>
+            <p>Votre rendez-vous a été mis à jour.</p>
+            <p><strong>Date :</strong> ${new Date(rdv.dateRdv).toLocaleString()}</p>
+            <p><strong>Durée :</strong> ${rdv.duree} minutes</p>
+            <p><strong>Nouvel agent :</strong> ${newAgent?.partner?.name || 'Notre équipe'}</p>
+            <p>Merci pour votre confiance.<br/>L'équipe CETIME</p>
+          </div>
+        `,
+      });
+    }
+
+    return res.json({
+      message: 'RDV réaffecté (email client envoyé)',
+      rdv: {
+        id: rdv.id,
+        agentId: rdv.agentId,
+        agentName: newAgent?.partner?.name || null,
+        dateRdv: rdv.dateRdv,
+        duree: rdv.duree,
+        statut: rdv.statut,
+      },
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ message: 'Erreur réaffectation', error: e });
+  }
+};
