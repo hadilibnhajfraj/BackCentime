@@ -1,10 +1,20 @@
+const { Op } = require('sequelize');
 const db = require('../models');
 const RendezVous = db.RendezVous;
 const User = db.res_users;
 const Partner = db.res_partner;
 const { sendEmailToAdmin, sendEmailToClient } = require('../utils/emailSender');
 
-// ✅ Client : Réserver un RDV
+/* ------------------------------ HELPERS DAY ------------------------------ */
+const dayBounds = (dateLike) => {
+  const d = new Date(dateLike);
+  const start = new Date(d); start.setHours(0, 0, 0, 0);
+  const end = new Date(start); end.setDate(end.getDate() + 1);
+  return { start, end };
+};
+
+/* ================================ CLIENT ================================ */
+// POST /rendezvous/reserver
 exports.reserver = async (req, res) => {
   try {
     const role = (req.user?.role || '').toUpperCase();
@@ -22,20 +32,29 @@ exports.reserver = async (req, res) => {
     const start = new Date(dateRdv);
     const end = new Date(start.getTime() + duree * 60000);
 
-    // 1️⃣ Vérifier si un employé est dispo dans ce créneau
+    // 1) chercher une disponibilité qui couvre le créneau
     const disponibilites = await db.Disponibilite.findAll({
-      where: {
-        start: { [db.Sequelize.Op.lte]: start },
-        end: { [db.Sequelize.Op.gte]: end },
-      },
+      where: { start: { [Op.lte]: start }, end: { [Op.gte]: end } },
+      order: [['start', 'ASC']],
     });
 
-    let agentDisponible = null;
-    if (disponibilites.length > 0) {
-      agentDisponible = disponibilites[0].agentId; // on prend le premier dispo
+    let agentDisponible = disponibilites?.[0]?.agentId ?? null;
+
+    // 1-bis) si un agent est trouvé, vérifier qu'il n'a PAS déjà un RDV ce jour-là
+    if (agentDisponible) {
+      const { start: ds, end: de } = dayBounds(start);
+      const alreadyRdv = await RendezVous.count({
+        where: {
+          agentId: Number(agentDisponible),
+          dateRdv: { [Op.gte]: ds, [Op.lt]: de },
+        },
+      });
+      if (alreadyRdv > 0) {
+        agentDisponible = null; // repasse en attente si conflit
+      }
     }
 
-    // 2️⃣ Créer le RDV avec ou sans employé
+    // 2) créer le RDV
     const rdv = await RendezVous.create({
       clientId: id,
       agentId: agentDisponible || null,
@@ -44,27 +63,36 @@ exports.reserver = async (req, res) => {
       statut: agentDisponible ? 'valide' : 'en_attente',
     });
 
-    // 3️⃣ Récupérer les infos du client
+    // infos client
     const user = await User.findByPk(id, {
       include: [{ model: Partner, as: 'partner' }],
     });
-
     const clientNom = user?.partner?.name || 'Client inconnu';
     const clientEmail = user?.partner?.email || null;
 
-    // 4️⃣ Si pas d’employé : notifier l’admin
-    if (!agentDisponible) {
-      await sendEmailToAdmin(rdv, clientNom);
-    }
-    // 5️⃣ Si employé trouvé : notifier le client par email
-    else if (clientEmail) {
+    // 3) TOUJOURS notifier l’admin
+    await sendEmailToAdmin({
+      subject: '📅 Nouvelle réservation CETIME',
+      html: `
+        <div style="font-family: Arial, sans-serif; font-size: 14px;">
+          <p><strong>Client :</strong> ${clientNom}</p>
+          <p><strong>Date :</strong> ${new Date(dateRdv).toLocaleString()}</p>
+          <p><strong>Durée :</strong> ${duree} min</p>
+          <p><strong>Agent auto-affecté :</strong> ${agentDisponible ? agentDisponible : 'Aucun (à affecter)'}</p>
+          <p>ID RDV : ${rdv.id}</p>
+        </div>
+      `,
+    });
+
+    // 4) si agent trouvé : mail au client
+    if (agentDisponible && clientEmail) {
       await sendEmailToClient({
         to: clientEmail,
         subject: '✅ Confirmation de votre rendez-vous CETIME',
         html: `
           <div style="font-family: Arial, sans-serif; font-size: 16px;">
             <p>Bonjour ${clientNom},</p>
-            <p>Votre rendez-vous a été confirmé avec succès.</p>
+            <p>Votre rendez-vous a été confirmé.</p>
             <p><strong>Date :</strong> ${new Date(dateRdv).toLocaleString()}</p>
             <p><strong>Durée :</strong> ${duree} minutes</p>
             <p>Merci pour votre confiance.<br/>L'équipe CETIME</p>
@@ -73,11 +101,10 @@ exports.reserver = async (req, res) => {
       });
     }
 
-    // 6️⃣ Retour API
     res.status(201).json({
       message: agentDisponible
-        ? '✅ RDV confirmé automatiquement avec employé (email envoyé au client)'
-        : '🔔 Pas d’employé disponible, demande envoyée à l’admin',
+        ? '✅ RDV confirmé automatiquement (emails admin & client envoyés)'
+        : '🔔 Pas d’employé disponible (email admin envoyé)',
       rdv,
     });
   } catch (error) {
@@ -86,8 +113,7 @@ exports.reserver = async (req, res) => {
   }
 };
 
-// ✅ Client : Voir ses RDVs
-// controllers/rendezVousController.js
+// GET /rendezvous/client
 exports.clientRdvs = async (req, res) => {
   const role = (req.user?.role || '').toUpperCase();
   const { id } = req.user;
@@ -106,8 +132,8 @@ exports.clientRdvs = async (req, res) => {
   res.status(200).json(rdvs);
 };
 
-
-// ✅ Admin : Confirmer un RDV
+/* ================================ ADMIN ================================= */
+// POST /rendezvous/confirmer/:id
 exports.confirmer = async (req, res) => {
   try {
     const rdv = await RendezVous.findByPk(req.params.id);
@@ -122,7 +148,7 @@ exports.confirmer = async (req, res) => {
   }
 };
 
-// ✅ Admin : Annuler un RDV
+// PUT /rendezvous/annuler/:id
 exports.annuler = async (req, res) => {
   try {
     const rdv = await RendezVous.findByPk(req.params.id);
@@ -137,18 +163,7 @@ exports.annuler = async (req, res) => {
   }
 };
 
-// ✅ Employé/Agent : Voir ses RDVs
-exports.agentRdvs = async (req, res) => {
-  try {
-    const { agentId } = req.params; // id employé (champ agentId conservé en DB)
-    const rdvs = await RendezVous.findAll({ where: { agentId } });
-    res.json(rdvs);
-  } catch (error) {
-    res.status(500).json({ message: 'Erreur chargement RDVs Employé', error });
-  }
-};
-
-// ✅ Admin : Voir tous les RDVs (réservés par clients + planifiés par employés)
+// GET /rendezvous/admin
 exports.rdvAdmin = async (req, res) => {
   try {
     const role = (req.user?.role || '').toUpperCase();
@@ -163,34 +178,23 @@ exports.rdvAdmin = async (req, res) => {
       ],
     });
 
-    const rdvsFormatted = rdvs.map((rdv) => {
-      const start = rdv.dateRdv;
-      const end = new Date(new Date(start).getTime() + rdv.duree * 60000);
-
-      let backgroundColor = '#ff9800'; // en attente
-      if (rdv.statut === 'valide') backgroundColor = '#4caf50';
-      else if (rdv.statut === 'annule') backgroundColor = '#f44336';
-
-      const isClientInitiated = !!rdv.clientId;
-      const title = isClientInitiated
-        ? `RDV Client: ${rdv.client?.partner?.name || 'Inconnu'}`
-        : `RDV Employé: ${rdv.agent?.partner?.name || 'Inconnu'}`;
-
-      return {
-        id: rdv.id,
-        start,
-        end,
-        title,
-        statut: rdv.statut,
-        backgroundColor,
-        borderColor: backgroundColor,
-      };
-    });
-
-    res.json(rdvsFormatted);
+    // Le front refait son propre mapping ; on fournit les infos complètes
+    res.json(rdvs);
   } catch (error) {
     console.error('❌ Erreur récupération RDVs admin :', error);
     res.status(500).json({ message: 'Erreur chargement RDVs Admin', error });
+  }
+};
+
+/* ============================ AGENT / EMPLOYÉ ============================ */
+// GET /rendezvous/agent/:agentId
+exports.agentRdvs = async (req, res) => {
+  try {
+    const { agentId } = req.params;
+    const rdvs = await RendezVous.findAll({ where: { agentId } });
+    res.json(rdvs);
+  } catch (error) {
+    res.status(500).json({ message: 'Erreur chargement RDVs Employé', error });
   }
 };
 
@@ -207,10 +211,7 @@ exports.getPendingForAgent = async (req, res) => {
 
   try {
     const rdvs = await db.RendezVous.findAll({
-      where: {
-        statut: 'en_attente',
-        agentId: null,
-      },
+      where: { statut: 'en_attente', agentId: null },
     });
 
     res.json(rdvs);
@@ -226,8 +227,8 @@ exports.agentValider = async (req, res) => {
     return res.status(403).json({ message: '⛔ Seuls les agents/employés peuvent valider' });
   }
 
-  const agentId = req.user.id; // id de l'employé connecté
-  const { decision } = req.body; // 'valider' ou 'refuser'
+  const agentId = req.user.id;
+  const { decision } = req.body; // 'valider' | 'refuser'
 
   try {
     const rdv = await db.RendezVous.findByPk(req.params.id, {
@@ -239,6 +240,18 @@ exports.agentValider = async (req, res) => {
     }
 
     if (decision === 'valider') {
+      // Vérifier qu'il n'a pas déjà un RDV le même jour
+      const { start, end } = dayBounds(rdv.dateRdv);
+      const conflict = await RendezVous.count({
+        where: {
+          agentId: Number(agentId),
+          dateRdv: { [Op.gte]: start, [Op.lt]: end },
+        },
+      });
+      if (conflict > 0) {
+        return res.status(409).json({ message: "Agent déjà pris par un autre RDV ce jour-là" });
+      }
+
       rdv.agentId = agentId;
       rdv.statut = 'valide';
       rdv.agentValidationDate = new Date();
@@ -274,7 +287,8 @@ exports.agentValider = async (req, res) => {
   }
 };
 
-// controllers/disponibilite.controller.js (création par admin)
+/* ============================ DISPONIBILITÉS ============================ */
+// POST /rendezvous/affecter/admin  (création d’une DISPO par l’admin)
 exports.createByAdmin = async (req, res) => {
   const { agentId, start, end } = req.body;
 
@@ -283,8 +297,21 @@ exports.createByAdmin = async (req, res) => {
   }
 
   try {
+    const { start: ds, end: de } = dayBounds(start);
+
+    // 1 seule DISPO par agent et par jour
+    const already = await db.Disponibilite.count({
+      where: {
+        agentId: Number(agentId),
+        start: { [Op.gte]: ds, [Op.lt]: de },
+      },
+    });
+    if (already > 0) {
+      return res.status(409).json({ message: "Cet agent a déjà une affectation (disponibilité) ce jour-là" });
+    }
+
     const dispo = await db.Disponibilite.create({
-      agentId, // champ DB conservé
+      agentId,
       start,
       end,
       createdByAdmin: true,
@@ -296,14 +323,14 @@ exports.createByAdmin = async (req, res) => {
     res.status(500).json({ message: 'Erreur interne', error });
   }
 };
-// NEW: lister les dispos d’un agent
+
+// GET /disponibilite/agent/:agentId
 exports.listByAgent = async (req, res) => {
   try {
-    const { agentId } = req.params;                 // id dans l’URL
+    const { agentId } = req.params;
     const { id: userId, role } = req.user || {};
     const isAdmin = (role || '').toUpperCase() === 'ADMIN';
 
-    // sécurité: un agent ne peut voir que ses propres dispos
     if (!isAdmin && Number(agentId) !== Number(userId)) {
       return res.status(403).json({ message: '⛔ Accès refusé' });
     }
@@ -319,7 +346,9 @@ exports.listByAgent = async (req, res) => {
     res.status(500).json({ message: 'Erreur serveur' });
   }
 };
-/** ✅ ADMIN: Ré-affecter l’agent d’un RDV (et notifier le client) */
+
+/* ============================ RÉAFFECTATION ============================ */
+// PUT /rendezvous/:id/reassign  (ADMIN)
 exports.reassign = async (req, res) => {
   try {
     const role = (req.user?.role || '').toUpperCase();
@@ -327,8 +356,8 @@ exports.reassign = async (req, res) => {
       return res.status(403).json({ message: "⛔ Accès réservé à l'administrateur" });
     }
 
-    const { id } = req.params;         // id du RDV
-    const { agentId } = req.body;      // nouvel agent
+    const { id } = req.params;    // id du RDV
+    const { agentId } = req.body; // nouvel agent
     if (!agentId) return res.status(400).json({ message: 'agentId requis' });
 
     const rdv = await RendezVous.findByPk(id, {
@@ -339,13 +368,24 @@ exports.reassign = async (req, res) => {
     });
     if (!rdv) return res.status(404).json({ message: 'Rendez-vous non trouvé' });
 
+    // Vérifier "1 RDV / jour / agent"
+    const { start, end } = dayBounds(rdv.dateRdv);
+    const conflict = await RendezVous.count({
+      where: {
+        agentId: Number(agentId),
+        id: { [Op.ne]: rdv.id },
+        dateRdv: { [Op.gte]: start, [Op.lt]: end },
+      },
+    });
+    if (conflict > 0) {
+      return res.status(409).json({ message: "Agent déjà pris par un autre RDV ce jour-là" });
+    }
+
     // maj agent
     rdv.agentId = agentId;
-    // si le RDV était en attente on le confirme
     if (rdv.statut === 'en_attente') rdv.statut = 'valide';
     await rdv.save();
 
-    // recharger nouvel agent (nom/email)
     const newAgent = await User.findByPk(agentId, {
       include: [{ model: Partner, as: 'partner' }],
     });

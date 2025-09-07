@@ -541,3 +541,53 @@ exports.getPrestationsByClient = async (req, res) => {
     res.status(500).json({ error: 'Erreur serveur' });
   }
 };
+// controllers/Prestation.controller.js
+exports.getPrestationFull = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ message: "id invalide" });
+
+    const sql = `
+      SELECT
+        pp.*,
+        d.name  AS department_name,
+        pt.name AS activity_name,
+        co.name AS country_name,
+        aaa.name AS analytic_name,
+        aaa.code AS analytic_code,
+        ru_partner.name AS responsible_name,        -- si vous mappez users -> res_partner
+        ru1_partner.name AS responsible1_name
+      FROM prestation_prestation pp
+      LEFT JOIN hr_department            d   ON d.id  = pp.department_id
+      LEFT JOIN product_template         pt  ON pt.id = pp.activity_id
+      LEFT JOIN res_country              co  ON co.id = pp.country_id
+      LEFT JOIN account_analytic_account aaa ON aaa.id = pp.analytic_account_id
+      LEFT JOIN res_users                ru  ON ru.id = pp.responsible_id
+      LEFT JOIN res_partner              ru_partner  ON ru_partner.id  = ru.partner_id
+      LEFT JOIN res_users                ru1 ON ru1.id = pp.responsible1_id
+      LEFT JOIN res_partner              ru1_partner ON ru1_partner.id = ru1.partner_id
+      WHERE pp.id = :id
+      LIMIT 1
+    `;
+    const rows = await db.sequelize.query(sql, {
+      replacements: { id },
+      type: db.Sequelize.QueryTypes.SELECT,
+    });
+    const row = rows?.[0];
+    if (!row) return res.status(404).json({ message: 'Prestation non trouvée' });
+
+    let documents = [];
+    if (db.Document) {
+      documents = await db.Document.findAll({
+        where: { prestation_id: id },
+        attributes: ['id', 'type', 'cheminFichier', 'actif', 'date'],
+        order: [['id', 'DESC']],
+      });
+    }
+    res.json({ row, documents });
+  } catch (e) {
+    console.error('getPrestationFull error', e);
+    res.status(500).json({ message: 'Erreur serveur', error: String(e) });
+  }
+};
+

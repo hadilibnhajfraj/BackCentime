@@ -13,5 +13,6 @@ router.get('/by-client', verifyToken, isClient, ctrl.getPrestationsByClient);
 router.get('/:id', ctrl.getPrestationById);
 router.put('/:id', ctrl.updatePrestation);
 router.delete('/:id', ctrl.deletePrestation);
+router.get('/:id/full', ctrl.getPrestationFull);
 
 module.exports = router;
