@@ -5,10 +5,11 @@ const {
   res_users,
   res_partner,
   res_groups,
+  db,
   res_users_res_groups_rel,
   sequelize,
 } = require('../models');
-
+const { WORD_ALLOWED_SET, normalizeName } = require('../utils/nameWhitelist');
 const { Op } = require('sequelize');
 const { OAuth2Client } = require('google-auth-library');
 const client = new OAuth2Client(
@@ -401,5 +402,38 @@ exports.listClients = async (req, res) => {
     res.json(rows);
   } catch (e) {
     res.status(500).json({ message: 'Erreur clients', error: e.message });
+  }
+};
+// Renvoie uniquement les agents présents dans la whitelist Word ET en base
+// GET /users/allowed
+exports.getAllowedAgents = async (req, res) => {
+  try {
+    // 1) on récupère les "employés/agents" en base
+    //    - soit par role (AGENT/EMPLOYEE), soit via votre mapping interne.
+    const users = await db.res_users.findAll({
+      where: {
+        // si vous avez une colonne role, décommentez:
+        // role: { [Op.in]: ['AGENT', 'EMPLOYEE'] }
+      },
+      include: [{ model: db.res_partner, as: 'partner' }],
+    });
+
+    // 2) mapping DB -> {id,name,email}
+    const mapped = users.map(u => {
+      const id = u.id;
+      const name = u?.partner?.name || u?.login || `Employé #${id}`;
+      const email = u?.partner?.email || null;
+      return { id, name, email };
+    });
+
+    // 3) filtre Word
+    const filtered = mapped
+      .filter(a => WORD_ALLOWED_SET.has(normalizeName(a.name)))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return res.json(filtered);
+  } catch (e) {
+    console.error('getAllowedAgents error:', e);
+    return res.status(500).json({ message: 'Erreur serveur', error: e.message });
   }
 };

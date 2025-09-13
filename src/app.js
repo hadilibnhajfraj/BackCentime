@@ -12,6 +12,7 @@ const disponibiliteRoutes = require('./routes/disponibiliteRouter');
 const notificationRoutes = require('./routes/notificationRoutes');
 const meetRoutes = require('./routes/lookupsRoutes');
 const authRoutes = require('./routes/authRoutes');
+const kpiRoutes = require('./routes/kpiRoutes');
 // (Optionnel) route de debug refresh
 // const debugGmail = require('./routes/debugGmail');
 
@@ -31,6 +32,7 @@ app.use('/rendezvous', rendezvousRoutes);
 app.use('/disponibilite', disponibiliteRoutes);
 app.use('/notifications', notificationRoutes);
 app.use('/routes', meetRoutes);
+app.use('/kpi', kpiRoutes);
 // app.use(debugGmail);
 
 module.exports = app;

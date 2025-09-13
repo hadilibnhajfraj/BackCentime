@@ -4,6 +4,7 @@ const router = express.Router();
 const authController = require('../controllers/authController');
 // Branche DIRECTEMENT sur le service IMAP (plus simple et explicite)
 const { getUnreadCount } = require('../services/gmailImapService');
+const allowedCtrl = require("../controllers/allowedController");
 
 router.post('/login', authController.login);
 router.post('/register', authController.register);
@@ -15,5 +16,5 @@ router.put('/user/:id', authController.updateUser);
 
 // Gmail → compteur non lus (IMAP)
 router.get('/gmail/unread-count', getUnreadCount);
-
+router.get("/allowed", allowedCtrl.getAllowedAgents);
 module.exports = router;

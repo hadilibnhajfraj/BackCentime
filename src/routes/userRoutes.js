@@ -104,4 +104,5 @@ router.patch('/validate/:id', verifyToken, isAdmin, async (req, res) => {
 });
 
 router.get('/summary', authController.getUserStats);
+
 module.exports = router;
